@@ -8,11 +8,11 @@ import java.util.Arrays;
 public final class StringArrayCellConsumer<RH extends CheckedConsumer<? super String[]>> implements CellConsumer {
 
 	public static final int DEFAULT_MAX_NUMBER_OF_CELL_PER_ROW = 64 * 1024 * 1024;
+	public static final int DEFAULT_ROW_SIZE = 8;
 	private final RH handler;
 	private final int maxNumberOfCellPerRow;
 	private int currentIndex;
-	private int currentLength = 8;
-	private String[] currentRow = new String[currentLength];
+	private String[] currentRow = new String[DEFAULT_ROW_SIZE];
 
 	private StringArrayCellConsumer(RH handler, int maxNumberOfCellPerRow) {
 		this.handler = handler;
@@ -27,12 +27,11 @@ public final class StringArrayCellConsumer<RH extends CheckedConsumer<? super St
 	}
 
 	private void ensureCapacity() {
-		if (currentIndex >= currentLength) {
-			if (currentLength >= maxNumberOfCellPerRow) {
+		if (currentIndex >= currentRow.length) {
+			if (currentRow.length >= maxNumberOfCellPerRow) {
 				throw new ArrayIndexOutOfBoundsException("Reach maximum number of cell per row " + currentIndex);
 			}
-			currentLength *= 2;
-			currentRow = Arrays.copyOf(currentRow, currentLength);
+			currentRow = Arrays.copyOf(currentRow, Math.min(maxNumberOfCellPerRow, currentRow.length * 2));
 		}
 	}
 
@@ -45,7 +44,6 @@ public final class StringArrayCellConsumer<RH extends CheckedConsumer<? super St
 
 	private boolean _endOfRow() throws Exception {
 		handler.accept(Arrays.copyOf(currentRow, currentIndex));
-		Arrays.fill(currentRow, 0, currentIndex, null);
 		currentIndex = 0;
 		return true;
 	}
