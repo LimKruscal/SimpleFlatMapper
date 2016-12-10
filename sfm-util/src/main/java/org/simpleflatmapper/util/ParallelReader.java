@@ -8,23 +8,19 @@ import java.util.concurrent.atomic.AtomicLong;
 public class ParallelReader extends Reader {
     private static final int DEFAULT_MAX_READ = 8192;
     private static final int DEFAULT_BUFFER_SIZE = 1024 * 32;
+    public static final int PADDING = 64;
+    public static final int PADDING_THRESHOLD = 1024;
 
-    private final Reader reader;
     private final DataProducer dataProducer;
-    private final char[] buffer;
+    private final char[] readBuffer;
 
     private final int bufferMask;
-    private final int maxRead;
-
-    private AtomicLong tail = new AtomicLong();
-    private AtomicLong head = new AtomicLong();
-
     private final long capacity;
+
+    private final AtomicLong tail;
+    private final AtomicLong head;
+
     private long tailCache;
-    private long headCache;
-
-    private final long padding;
-
 
     public ParallelReader(Reader reader, Executor executorService) {
         this(reader, executorService, DEFAULT_BUFFER_SIZE);
@@ -34,15 +30,24 @@ public class ParallelReader extends Reader {
         this(reader, executorService, bufferSize, DEFAULT_MAX_READ);
     }
     public ParallelReader(Reader reader, Executor executorService, int bufferSize, int maxRead) {
-        int powerOf2 =  1 << 32 - Integer.numberOfLeadingZeros(bufferSize - 1);
-        padding = powerOf2 <= 1024 ? 0 : 64;
-        this.reader = reader;
-        buffer = new char[powerOf2];
-        bufferMask = buffer.length - 1;
-        dataProducer = new DataProducer();
+        bufferSize = toPowerOfTwo(bufferSize);
+
+        readBuffer = new char[bufferSize];
+
+        tail = new AtomicLong();
+        head = new AtomicLong();
+
+        dataProducer = new DataProducer(reader, readBuffer, bufferSize <= PADDING_THRESHOLD ? 0 : PADDING, maxRead, tail, head);
+
         executorService.execute(dataProducer);
-        capacity = buffer.length;
-        this.maxRead = maxRead;
+
+        bufferMask = readBuffer.length - 1;
+        capacity = readBuffer.length;
+
+    }
+
+    private static int toPowerOfTwo(int bufferSize) {
+        return 1 << 32 - Integer.numberOfLeadingZeros(bufferSize - 1);
     }
 
     @Override
@@ -81,7 +86,7 @@ public class ParallelReader extends Reader {
 
                 int headIndex = (int) (currentHead & bufferMask);
 
-                char c = buffer[headIndex];
+                char c = readBuffer[headIndex];
 
                 head.lazySet(currentHead + 1);
 
@@ -104,7 +109,7 @@ public class ParallelReader extends Reader {
         } while(true);
     }
 
-    private void waitingStrategy() {
+    private static void waitingStrategy() {
         Thread.yield();
     }
 
@@ -116,8 +121,8 @@ public class ParallelReader extends Reader {
         int block1Length = Math.min(len, Math.min(usedLength, (int) (capacity - headIndex)));
         int block2Length =  Math.min(len, usedLength) - block1Length;
 
-        System.arraycopy(buffer, headIndex, cbuf, off, block1Length);
-        System.arraycopy(buffer, 0, cbuf, off+ block1Length, block2Length);
+        System.arraycopy(readBuffer, headIndex, cbuf, off, block1Length);
+        System.arraycopy(readBuffer, 0, cbuf, off+ block1Length, block2Length);
 
         return block1Length + block2Length;
     }
@@ -125,23 +130,48 @@ public class ParallelReader extends Reader {
     @Override
     public void close() throws IOException {
         dataProducer.stop();
-        reader.close();
     }
 
-    private class DataProducer implements Runnable {
+    private static class DataProducer implements Runnable {
         private volatile boolean run = true;
         private volatile IOException exception;
+
+        private final Reader reader;
+        private final char[] writeBuffer;
+        private final long readWriteZonePadding;
+        private final int maxRead;
+
+        private final int bufferMask;
+        private final int capacity;
+
+        private final AtomicLong tail;
+        private final AtomicLong head;
+
+        private long headCache;
+
+        private DataProducer(Reader reader, char[] writeBuffer, long readWriteZonePadding, int maxRead, AtomicLong tail, AtomicLong head) {
+            this.reader = reader;
+            this.writeBuffer = writeBuffer;
+            this.readWriteZonePadding = readWriteZonePadding;
+            this.maxRead = maxRead;
+
+            bufferMask = writeBuffer.length - 1;
+            capacity = writeBuffer.length;
+            this.tail = tail;
+
+            this.head = head;
+        }
 
         @Override
         public void run() {
             long currentTail = tail.get();
             while(run) {
 
-                final long wrapPoint = currentTail - buffer.length;
+                final long wrapPoint = currentTail - writeBuffer.length;
 
-                if (headCache - padding <= wrapPoint) {
+                if (headCache - readWriteZonePadding <= wrapPoint) {
                     headCache = head.get();
-                    if (headCache <= wrapPoint) {
+                    if (headCache - readWriteZonePadding <= wrapPoint) {
                         waitingStrategy();
                         continue;
                     }
@@ -173,7 +203,7 @@ public class ParallelReader extends Reader {
 
             int block1Length = endBlock1 - tailIndex;
 
-            return reader.read(buffer, tailIndex, block1Length);
+            return reader.read(writeBuffer, tailIndex, block1Length);
         }
 
         public void stop() {
