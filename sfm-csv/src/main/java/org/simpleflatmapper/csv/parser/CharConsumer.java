@@ -56,7 +56,8 @@ public final class CharConsumer {
 			// unescaped loop
 			if ((currentState & ESCAPED_AREA) == 0) {
 				if ((currentState & COMMENTED) == 0) {
-					while (currentIndex < bufferSize) {
+					int lSize = Math.min(bufferSize, chars.length);
+					while (currentIndex < lSize) {
 						final char character = chars[currentIndex];
 						final int cellEnd = currentIndex;
 
