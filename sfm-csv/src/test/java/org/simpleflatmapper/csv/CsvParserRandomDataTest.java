@@ -5,14 +5,18 @@ import org.simpleflatmapper.csv.parser.CellConsumer;
 import org.simpleflatmapper.util.ListCollector;
 
 import java.io.CharArrayReader;
+import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.Reader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
+import java.util.UUID;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 
 public class CsvParserRandomDataTest {
 
@@ -22,9 +26,38 @@ public class CsvParserRandomDataTest {
 		char quoteChar = '"';
 		char separator = ',';
 		String carriageReturn = "\r\n";
+		public char[] chars;
 
 		public TestData(String[][] expectations) {
 			this.expectations = expectations;
+		}
+
+		@Override
+		public String toString() {
+			return "TestData{" +
+					", quoteChar=" + quoteChar +
+					", separator=" + separator +
+					", carriageReturn='" + carriageReturn + '\'' +
+					'}';
+		}
+
+
+		public void save() throws IOException {
+			File dir = new File("target/random-csv");
+
+			dir.mkdirs();
+
+			File f = new File(dir, UUID.randomUUID().toString()+ ".csv");
+
+			FileWriter fw = new FileWriter(f);
+			try {
+				fw.write(chars);
+				fw.flush();
+			} finally {
+				fw.close();
+			}
+
+			System.out.println("f = " + f);
 		}
 	}
 
@@ -96,6 +129,9 @@ public class CsvParserRandomDataTest {
 	private void testDsl(TestData testData, CsvParser.DSL dsl) throws IOException {
 
 		char[] chars = toCSV(testData).toString().toCharArray();
+
+		testData.chars = chars;
+
 		// reader call
 		testParseAll(testData, dsl, chars);
 
@@ -205,6 +241,30 @@ public class CsvParserRandomDataTest {
 		String[][] cells;
 		cells =
 				dsl.reader(createReader(chars)).parseAll(new AccumulateCellConsumer()).allValues();
+
+		assertEquals("number of rows does not match", testData.expectations.length, cells.length);
+		for(int i = 0; i < testData.expectations.length; i++) {
+			String[] expectedRow = testData.expectations[i];
+			String[] actualRow = cells[i];
+
+			assertEquals("number of cells on row "  + i + " does not match", expectedRow.length, actualRow.length);
+
+			for(int j = 0; j < expectedRow.length; j++) {
+				String expectedCell = expectedRow[j];
+				String actualCell = actualRow[j];
+
+				StringBuilder escapedCell = new StringBuilder();
+
+				try {
+					assertEquals("Cell " + i + "/" + testData.expectations.length + "," + j + "/" + expectedRow.length + " does not match " + testData + " escaped line " + needEscape(expectedCell, testData) + "\n\n\n\n " + Arrays.asList(expectedRow), expectedCell, actualCell);
+				} catch (AssertionError e) {
+					testData.save();
+					throw e;
+				}
+
+			}
+
+		}
 		assertArrayEquals(testData.expectations, cells);
 	}
 
@@ -215,7 +275,6 @@ public class CsvParserRandomDataTest {
 	private CharSequence toCSV(TestData testData) {
 		String[][] cells = testData.expectations;
 		char separator = testData.separator;
-		char quoteChar = testData.quoteChar;
 		String carriageReturn = testData.carriageReturn;
 
 		StringBuilder sb = new StringBuilder();
@@ -228,25 +287,30 @@ public class CsvParserRandomDataTest {
 				if (colIndex > 0) {
 					sb.append(separator);
 				}
-				if (needEscape(cell, testData)) {
-					sb.append(quoteChar);
-					for (int j = 0; j < cell.length(); j++) {
-						char c = cell.charAt(j);
-						if (c == quoteChar) {
-							sb.append(quoteChar);
-						}
-						sb.append(c);
-					}
-					sb.append(quoteChar);
-				} else {
-					sb.append(cell);
-				}
+				appendCell(testData, sb, cell);
 			}
 			sb.append(carriageReturn);
 
 		}
 
 		return sb;
+	}
+
+	private void appendCell(TestData testData, StringBuilder sb, String cell) {
+		char quoteChar = testData.quoteChar;
+		if (needEscape(cell, testData)) {
+            sb.append(quoteChar);
+            for (int j = 0; j < cell.length(); j++) {
+                char c = cell.charAt(j);
+                if (c == quoteChar) {
+                    sb.append(quoteChar);
+                }
+                sb.append(c);
+            }
+            sb.append(quoteChar);
+        } else {
+            sb.append(cell);
+        }
 	}
 
 	private boolean needEscape(String cell, TestData testData) {

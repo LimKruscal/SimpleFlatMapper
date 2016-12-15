@@ -8,18 +8,23 @@ import java.io.IOException;
  */
 public final class CharConsumer {
 
+	public static final int END_ROW_CONSUMED = 4096;
+	public static final int END_ROW                     = 2048;
 
-	public static final int ROW_DATA                    = 64;
-	public static final int COMMENTED                   = 32;
-	public static final int CELL_DATA                   = 16;
-	public static final int ESCAPED                     = 8;
-	public static final int LAST_CHAR_WAS_SEPARATOR     = 4;
-	public static final int LAST_CHAR_WAS_CR            = 2;
-	public static final int ESCAPED_AREA                = 1;
+	public static final int UNCONSUMED_DATA             = 1024;
+	public static final int ROW_DATA                    = 512;
+
+	public static final int ESCAPE_UNESCAPE_AREA        = 32;
+
+	public static final int COMMENTED                   = 5;
+	public static final int LAST_CHAR_WAS_CR            = 4;
+	public static final int ESCAPED                     = 3;
+	public static final int CELL_DATA                   = 2;
+	public static final int LAST_CHAR_WAS_SEPARATOR     = 1;
 	public static final int NONE                        = 0;
 
-	private static final int TURN_OFF_LAST_CHAR_MASK = ~(LAST_CHAR_WAS_CR|LAST_CHAR_WAS_SEPARATOR);
-	private static final int TURN_OFF_ESCAPED_AREA = ~(ESCAPED_AREA);
+	private static final int STATE_MASK = ESCAPE_UNESCAPE_AREA - 1;
+	private static final int TURNOFF_END_OF_ROW = ~ (END_ROW | END_ROW_CONSUMED);
 
 	private static final char LF = '\n';
 	private static final char CR = '\r';
@@ -41,179 +46,256 @@ public final class CharConsumer {
 
 	public final void consumeAllBuffer(final CellConsumer cellConsumer) {
 
-		final boolean notIgnoreLeadingSpace = !cellPreProcessor.ignoreLeadingSpace();
-		final boolean yamlComment = textFormat.yamlComment;
-		final char escapeChar = textFormat.escapeChar;
-		final char separatorChar = textFormat.separatorChar;
+		CharBuffer csvBuffer = this.csvBuffer;
+		final int bufferSize =  csvBuffer.bufferSize;
+		final char[] buffer = csvBuffer.buffer;
 
 		int currentState = _currentState;
-		int currentIndex = _currentIndex;
 
-		final char[] chars = csvBuffer.buffer;
-		final int bufferSize =  csvBuffer.bufferSize;
-
-		while(currentIndex < bufferSize) {
-			// unescaped loop
-			if ((currentState & ESCAPED_AREA) == 0) {
-				if ((currentState & COMMENTED) == 0) {
-					int lSize = Math.min(bufferSize, chars.length);
-					while (currentIndex < lSize) {
-						final char character = chars[currentIndex];
-						final int cellEnd = currentIndex;
-
-						currentIndex++;
-
-						if (character == separatorChar) { // separator
-							cellPreProcessor.newCell(chars, csvBuffer.mark, cellEnd, cellConsumer, currentState);
-							csvBuffer.mark = currentIndex;
-							currentState = LAST_CHAR_WAS_SEPARATOR | ROW_DATA;
-							continue;
-						} else if (character == LF) { // \n
-							if ((currentState & LAST_CHAR_WAS_CR) == 0) {
-								cellPreProcessor.newCell(chars, csvBuffer.mark, cellEnd, cellConsumer, currentState);
-								cellConsumer.endOfRow();
-							}
-							csvBuffer.mark = currentIndex;
-							currentState = NONE;
-							continue;
-						} else if (character == CR) { // \r
-							cellPreProcessor.newCell(chars, csvBuffer.mark, cellEnd, cellConsumer, currentState);
-							csvBuffer.mark = currentIndex;
-							currentState = LAST_CHAR_WAS_CR;
-							cellConsumer.endOfRow();
-							continue;
-						} else if (((currentState ^ CELL_DATA) & (ESCAPED | CELL_DATA)) != 0 && character == escapeChar) {
-							currentState = ESCAPED_AREA | ESCAPED;
-							break;
-						} else if (yamlComment && (currentState & (CELL_DATA | ROW_DATA)) == 0 && character == COMMENT) {
-							currentState |= COMMENTED;
-							break;
-						}
-
-						currentState &= TURN_OFF_LAST_CHAR_MASK;
-						if (notIgnoreLeadingSpace || character != SPACE) {
-							currentState |= CELL_DATA;
-						}
-					}
-				} else { // comment
-					int nextEndOfLineChar = findNexEndOfLineChar(chars, currentIndex, bufferSize);
-					if (nextEndOfLineChar != -1) {
-						cellPreProcessor.newCell(chars, csvBuffer.mark, nextEndOfLineChar, cellConsumer, currentState);
-						cellConsumer.endOfRow();
-						currentIndex = nextEndOfLineChar + 1;
-						csvBuffer.mark = currentIndex;
-						currentState = chars[nextEndOfLineChar] == CR ? LAST_CHAR_WAS_CR : NONE;
-					} else {
-						currentIndex = bufferSize;
-					}
-				}
-			} else {
-				// escaped area
-				int nextEscapeChar = findNexChar(chars, currentIndex, bufferSize, escapeChar);
-				if (nextEscapeChar != -1) {
-					currentIndex = nextEscapeChar + 1;
-					currentState &= TURN_OFF_ESCAPED_AREA;
-				} else {
-					currentIndex = bufferSize;
-				}
+		while(_currentIndex < bufferSize) {
+			switch (toEffectiveState(currentState)) {
+				case NONE:
+				case LAST_CHAR_WAS_SEPARATOR:
+					currentState = nextStartOfCell(currentState, buffer, _currentIndex, bufferSize, cellConsumer); // end row potential
+					break;
+				case CELL_DATA:
+					currentState = nextCellData(currentState, buffer,  csvBuffer.mark, _currentIndex, bufferSize, cellConsumer); // end row potential
+					break;
+				case ESCAPED:
+					currentState = nextEscaped(currentState, buffer,  csvBuffer.mark, _currentIndex, bufferSize, cellConsumer); // end row potential
+					break;
+				case LAST_CHAR_WAS_CR:
+					currentState = nextLastCharWasCR(buffer, _currentIndex, bufferSize, cellConsumer); // end row potential
+					break;
+				case COMMENTED:
+					currentState = nextComment(currentState, buffer,  csvBuffer.mark, _currentIndex, bufferSize,cellConsumer); // end row potential
+					break;
+				default:
+					throw new IllegalStateException("Invalid state " + toEffectiveState(currentState));
 			}
 		}
 
 		_currentState = currentState;
-		_currentIndex = currentIndex;
+	}
+
+	public final boolean consumeToNextRow(CellConsumer cellConsumer) {
+		CharBuffer csvBuffer = this.csvBuffer;
+		final int bufferSize =  csvBuffer.bufferSize;
+		final char[] buffer = csvBuffer.buffer;
+
+
+		int currentState = _currentState;
+
+		while(_currentIndex < bufferSize) {
+
+			switch (toEffectiveState(currentState)) {
+				case NONE:
+				case LAST_CHAR_WAS_SEPARATOR:
+					currentState = nextStartOfCell(currentState, buffer, _currentIndex, bufferSize, cellConsumer); // end row potential
+					break;
+				case CELL_DATA:
+					currentState = nextCellData(currentState, buffer, csvBuffer.mark,  _currentIndex, bufferSize, cellConsumer); // end row potential
+					break;
+				case ESCAPED:
+					currentState = nextEscaped(currentState, buffer,  csvBuffer.mark, _currentIndex, bufferSize, cellConsumer); // end row potential
+					break;
+				case LAST_CHAR_WAS_CR:
+					currentState = nextLastCharWasCR(buffer, _currentIndex, bufferSize, cellConsumer); // end row potential
+					break;
+				case COMMENTED:
+					currentState = nextComment(currentState, buffer,  csvBuffer.mark, _currentIndex, bufferSize, cellConsumer); // end row potential
+					break;
+				default:
+					throw new IllegalStateException("Invalid state " + toEffectiveState(currentState));
+			}
+
+
+			if ((currentState & END_ROW) != 0) {
+				_currentState = currentState;
+				return (currentState & END_ROW_CONSUMED) != 0;
+			}
+		}
+		_currentState = currentState;
+		return false;
+	}
+
+	private int nextCellData(int currentState, char[] buffer, int cellStart, int currentIndex, int bufferSize, CellConsumer cellConsumer) {
+		char separatorChar = textFormat.separatorChar;
+		for(int i = currentIndex; i < bufferSize; i++) {
+			char c = buffer[i];
+			if (c == separatorChar) {
+				_currentIndex = i + 1;
+				return endOfCellSeparator(currentState, buffer, cellStart, i, cellConsumer);
+			} else if (c == LF) {
+				_currentIndex = i + 1;
+				return endOfCellLF(currentState, buffer, cellStart, i, cellConsumer);
+			} else if (c == CR) {
+				_currentIndex = i + 1;
+				return endOfCellCR(currentState, buffer, cellStart, i, cellConsumer);
+			}
+		}
+		_currentIndex = bufferSize;
+		return currentState;
+	}
+
+	private int nextComment(int currentState, char[] buffer, int cellStart, int currentIndex, int bufferSize, CellConsumer cellConsumer) {
+		for(int i = currentIndex; i < bufferSize; i++) {
+			char c = buffer[i];
+			if (c == LF) {
+				_currentIndex = i + 1;
+				return endOfCellLF(currentState, buffer, cellStart, i, cellConsumer)  & TURNOFF_END_OF_ROW;
+			} else if (c == CR) {
+				_currentIndex = i + 1;
+				return endOfCellCR(currentState, buffer, cellStart, i, cellConsumer) & TURNOFF_END_OF_ROW;
+			}
+		}
+		_currentIndex = bufferSize;
+		return currentState;
+	}
+
+	private int nextEscaped(int currentState, char[] buffer, int cellStart, int currentIndex, int bufferSize, CellConsumer cellConsumer) {
+
+		char escapeChar = textFormat.escapeChar;
+		if ((currentState & ESCAPE_UNESCAPE_AREA) == 0) {
+			return nextEscapedArea(currentState, buffer, cellStart, currentIndex, bufferSize, cellConsumer, escapeChar);
+		} else {
+			return nextEscapedUnescapeArea(currentState, buffer,  cellStart, currentIndex, bufferSize, cellConsumer, escapeChar);
+		}
+	}
+
+	private int nextEscapedUnescapeArea(int currentState, char[] buffer, int cellStart, int currentIndex, int bufferSize, CellConsumer cellConsumer, char escapeChar) {
+		char separatorChar = textFormat.separatorChar;
+		int index = currentIndex;
+		do {
+            char c = buffer[index];
+            int cellEnd = index;
+            index++;
+            if (c == separatorChar) {
+                _currentIndex = index;
+                return endOfCellSeparator(currentState, buffer, cellStart, cellEnd, cellConsumer);
+            } else if (c == LF) {
+                _currentIndex = index;
+                return endOfCellLF(currentState, buffer, cellStart, cellEnd, cellConsumer);
+            } else if (c == CR) {
+                _currentIndex = index;
+                return endOfCellCR(currentState, buffer, cellStart, cellEnd, cellConsumer);
+            } else  if (c == escapeChar) {
+				_currentIndex = index;
+				currentState ^= ESCAPE_UNESCAPE_AREA;
+				if (index < bufferSize) {
+					return nextEscapedArea(currentState, buffer, cellStart, index, bufferSize, cellConsumer, escapeChar);
+				}
+            }
+        } while(index < bufferSize);
+		_currentIndex = bufferSize;
+		return currentState;
+	}
+
+	private int nextEscapedArea(int currentState, char[] buffer, int cellStart, int currentIndex, int bufferSize, CellConsumer cellConsumer, char escapeChar) {
+		int i = findNexChar(buffer, currentIndex, bufferSize, escapeChar);
+
+		if (i != -1) {
+			int nextIndex = i + 1;
+			_currentIndex = nextIndex;
+			currentState |= ESCAPE_UNESCAPE_AREA;
+			if (nextIndex < bufferSize) {
+				return nextEscapedUnescapeArea(currentState, buffer, cellStart, nextIndex, bufferSize, cellConsumer, escapeChar);
+			}
+		} else {
+			_currentIndex = bufferSize;
+		}
+		return currentState;
+	}
+
+	private int endOfRow(int currentState, CellConsumer cellConsumer) {
+		int state = currentState | END_ROW;
+		if (cellConsumer.endOfRow())
+			state |= END_ROW_CONSUMED;
+		return state;
+	}
+
+	private int endOfCellCR(int currentState, char[] buffer, int start, int end, CellConsumer cellConsumer) {
+		newCell(currentState, buffer, start, end, cellConsumer);
+		return endOfRow(LAST_CHAR_WAS_CR, cellConsumer);
+	}
+
+	private int endOfCellLF(int currentState, char[] buffer, int start, int end, CellConsumer cellConsumer) {
+		newCell(currentState, buffer, start, end, cellConsumer);
+		return endOfRow(NONE, cellConsumer);
+	}
+
+	private int endOfCellSeparator(int currentState, char[] buffer, int start, int end, CellConsumer cellConsumer) {
+		newCell(currentState, buffer, start, end, cellConsumer);
+		return LAST_CHAR_WAS_SEPARATOR | ROW_DATA;
 	}
 
 
-	public final boolean consumeToNextRow(CellConsumer cellConsumer) {
-		final boolean notIgnoreLeadingSpace = !cellPreProcessor.ignoreLeadingSpace();
-		final char escapeChar = textFormat.escapeChar;
-		final char separatorChar = textFormat.separatorChar;
-		final boolean yamlComment = textFormat.yamlComment;
+	private int nextLastCharWasCR(char[] buffer, int currentIndex, int bufferSize, CellConsumer cellConsumer) {
+		char c = buffer[currentIndex];
 
-		int currentState = _currentState;
-		int currentIndex = _currentIndex;
+		if (c == LF) {
+			currentIndex ++;
+			_currentIndex = currentIndex;
+		}
 
-		final char[] chars = csvBuffer.buffer;
-		final int bufferSize =  csvBuffer.bufferSize;
+		if (currentIndex < bufferSize) {
+			return nextStartOfCell(NONE, buffer, currentIndex, bufferSize, cellConsumer);
+		}
 
-		while(currentIndex < bufferSize) {
-			// unescaped loop
-			if ((currentState & ESCAPED_AREA) == 0) {
-				if ((currentState & COMMENTED) == 0) {
-					while(currentIndex < bufferSize) {
-						final char character = chars[currentIndex];
-						final int cellEnd = currentIndex;
+		return NONE;
+	}
 
-						currentIndex ++;
+	private int nextStartOfCell(int currentState, char[] buffer, int currentIndex, int bufferSize, CellConsumer cellConsumer) {
 
-						if (character == separatorChar) { // separator
-							cellPreProcessor.newCell(chars, csvBuffer.mark, cellEnd, cellConsumer, currentState);
-							csvBuffer.mark = currentIndex;
-							currentState = LAST_CHAR_WAS_SEPARATOR | ROW_DATA;
-							continue;
-						} else if (character == LF) { // \n
-							if ((currentState & LAST_CHAR_WAS_CR) == 0) {
-								cellPreProcessor.newCell(chars, csvBuffer.mark, cellEnd, cellConsumer, currentState);
-								if (cellConsumer.endOfRow()) {
-									csvBuffer.mark = currentIndex;
-									_currentState = NONE;
-									_currentIndex = currentIndex;
-									return true;
-								}
-							}
-							csvBuffer.mark = currentIndex;
-							currentState = NONE;
-							continue;
-						} else if (character == CR) { // \r
-							cellPreProcessor.newCell(chars, csvBuffer.mark, cellEnd, cellConsumer, currentState);
-							csvBuffer.mark = currentIndex;
-							currentState = LAST_CHAR_WAS_CR;
-							if (cellConsumer.endOfRow()) {
-								_currentState = currentState;
-								_currentIndex = currentIndex;
-								return true;
-							}
-							continue;
-						} else if (((currentState ^ CELL_DATA) & (ESCAPED | CELL_DATA)) != 0 && character == escapeChar) {
-							currentState = ESCAPED_AREA | ESCAPED;
-							break;
-						} else if (yamlComment && (currentState & (CELL_DATA | ROW_DATA)) == 0 && character == COMMENT) {
-							currentState |= COMMENTED;
-							break;
-						}
 
-						currentState &= TURN_OFF_LAST_CHAR_MASK;
-						if (notIgnoreLeadingSpace || character != SPACE) {
-							currentState |= CELL_DATA;
-						}
-					}
-				} else {
-					int nextEndOfLineChar = findNexEndOfLineChar(chars, currentIndex, bufferSize);
-					if (nextEndOfLineChar != -1) {
-						currentIndex = nextEndOfLineChar + 1;
-						cellPreProcessor.newCell(chars, csvBuffer.mark, nextEndOfLineChar, cellConsumer, currentState);
-						cellConsumer.endOfRow();
-						csvBuffer.mark = currentIndex;
-						currentState = chars[nextEndOfLineChar] == CR ? LAST_CHAR_WAS_CR : NONE;
-					} else {
-						currentIndex = bufferSize;
-					}
+		if (textFormat.trimSpaces) {
+			// skip spaces
+			for(;currentIndex < bufferSize; currentIndex++) {
+				if (buffer[currentIndex] != SPACE) {
+					break;
 				}
-			} else {
-				int nextEscapeChar = findNexChar(chars, currentIndex, bufferSize, escapeChar);
-				if (nextEscapeChar != -1) {
-					currentIndex = nextEscapeChar + 1;
-					currentState &= TURN_OFF_ESCAPED_AREA;
-				} else {
-					currentIndex = bufferSize;
-				}
+			}
+			if (currentIndex >= bufferSize) {
+				_currentIndex = currentIndex;
+				csvBuffer.mark = currentIndex;
+				return UNCONSUMED_DATA;
 			}
 		}
 
-		_currentState = currentState;
-		_currentIndex = currentIndex;
+		csvBuffer.mark = currentIndex;
 
-		return false;
+		int nextIndex = currentIndex + 1;
+		_currentIndex = nextIndex;
+
+
+		char c = buffer[currentIndex];
+		if (c == textFormat.separatorChar) {
+			return endOfCellSeparator(currentState, buffer, currentIndex, currentIndex, cellConsumer);
+		} else if (c == LF) {
+			return endOfCellLF(currentState, buffer, currentIndex, currentIndex, cellConsumer);
+		} else if (c == CR) {
+			return endOfCellCR(currentState, buffer, currentIndex, currentIndex, cellConsumer);
+		} else if (c == textFormat.escapeChar) {
+			currentState = ESCAPED | UNCONSUMED_DATA | ROW_DATA;
+			if (nextIndex < bufferSize) {
+				return nextEscapedArea(currentState, buffer, currentIndex, nextIndex, bufferSize, cellConsumer, textFormat.escapeChar);
+			}
+		} else if (textFormat.yamlComment && c == COMMENT && (currentState & ROW_DATA) == 0) {
+			currentState = COMMENTED | UNCONSUMED_DATA | ROW_DATA;
+			if (nextIndex < bufferSize) {
+				return nextComment(currentState, buffer, currentIndex, nextIndex, bufferSize, cellConsumer);
+			}
+		} else {
+			currentState = CELL_DATA | UNCONSUMED_DATA | ROW_DATA;
+			if (nextIndex < bufferSize) {
+				return nextCellData(currentState, buffer, currentIndex, nextIndex, bufferSize, cellConsumer);
+			}
+		}
+		return currentState;
+	}
+
+	private void newCell(int currentState, char[] buffer, int start, int end, CellConsumer cellConsumer) {
+		cellPreProcessor.newCell(buffer, start, end, cellConsumer, currentState);
 	}
 
 	private int findNexChar(char[] chars, int start, int end, char c) {
@@ -223,32 +305,33 @@ public final class CharConsumer {
 		return -1;
 	}
 
-	private int findNexEndOfLineChar(char[] chars, int start, int end) {
-		for(int i = start; i < end; i++) {
-			char c = chars[i];
-			if (c == CR || c == LF) return i;
-		}
-		return -1;
-	}
 
 	public final void finish(CellConsumer cellConsumer) {
-		if ( hasUnconsumedData()
-				|| (_currentState & LAST_CHAR_WAS_SEPARATOR) != 0) {
-			cellPreProcessor.newCell(csvBuffer.buffer, csvBuffer.mark, _currentIndex, cellConsumer, _currentState);
+		if ( (_currentState & UNCONSUMED_DATA) != 0) {
+			int cellEnd = _currentIndex;
+			cellPreProcessor.newCell(csvBuffer.buffer, csvBuffer.mark, cellEnd, cellConsumer, _currentState);
 			csvBuffer.mark = _currentIndex + 1;
+			_currentState = NONE;
+		} else if (isState(_currentState, LAST_CHAR_WAS_SEPARATOR)) {
+			cellPreProcessor.newCell(csvBuffer.buffer, 0, 0, cellConsumer, _currentState);
 			_currentState = NONE;
 		}
 		cellConsumer.end();
 	}
 
-	private boolean hasUnconsumedData() {
-		return _currentIndex > csvBuffer.mark;
-	}
-
 	public boolean next() throws IOException {
 		int mark = csvBuffer.mark;
 		boolean b = csvBuffer.next();
-		_currentIndex -= mark - csvBuffer.mark;
+		int shift = mark - csvBuffer.mark;
+		_currentIndex -= shift;
 		return b;
+	}
+
+	public static boolean isState(int state, int test) {
+		return (toEffectiveState(state)) == test;
+	}
+
+	public static int toEffectiveState(int state) {
+		return state & STATE_MASK;
 	}
 }

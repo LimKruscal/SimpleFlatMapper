@@ -34,7 +34,7 @@ B
 
     @State(Scope.Benchmark)
     public static class UnescapeParam {
-        public static final TextFormat TEXT_FORMAT = new TextFormat(',', '"', false);
+        public static final TextFormat TEXT_FORMAT = TextFormat.CSV;
         public char[] content;
 
         public Unescaper unescaper;

@@ -30,9 +30,4 @@ public final class TrimCellPreProcessor extends CellPreProcessor {
             ;
         return start;
     }
-
-    @Override
-    public boolean ignoreLeadingSpace() {
-        return true;
-    }
 }

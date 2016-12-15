@@ -12,21 +12,10 @@ public final class YamlCellPreProcessor extends CellPreProcessor {
 	private static final int REGULAR_ROW = 1;
 	private static final int NONE = 0;
 
-	private final boolean ignoreLeadingSpace;
-
-	public YamlCellPreProcessor(boolean ignoreLeadingSpace) {
-		this.ignoreLeadingSpace = ignoreLeadingSpace;
-	}
-
 	public void newCell(char[] chars, int start, int end, CellConsumer cellConsumer, int state) {
 		YamlCellConsumer yamlCellConsumer = (YamlCellConsumer) cellConsumer;
 		yamlCellConsumer.newCell(chars, start, end, state);
 	}
-
-	public boolean ignoreLeadingSpace() {
-		return ignoreLeadingSpace;
-	}
-
 
 	public static final class YamlCellConsumer implements CellConsumer {
 
@@ -50,7 +39,7 @@ public final class YamlCellPreProcessor extends CellPreProcessor {
 		}
 
 		public void newCell(char[] chars, int start, int end, int state) {
-			if ((state &  CharConsumer.COMMENTED ) == 0) {
+			if (!CharConsumer.isState(state, CharConsumer.COMMENTED)) {
 				rowCellPreProcessor.newCell(chars, start, end, rowDelegate, state);
 				rowState = REGULAR_ROW;
 			} else {

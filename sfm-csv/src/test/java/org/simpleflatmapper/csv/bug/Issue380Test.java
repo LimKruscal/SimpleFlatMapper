@@ -13,7 +13,7 @@ import static org.junit.Assert.assertEquals;
 public class Issue380Test {
 
     @Test
-    public void testYamlWithQuoteProtectedCR() throws IOException {
+    public void testYamlWithQuoteProtectedLF() throws IOException {
         ListCollector<String[]> rowConsumer = new ListCollector<String[]>();
         ListCollector<String> commentConsumer = new ListCollector<String>();
         CsvParser.dsl()

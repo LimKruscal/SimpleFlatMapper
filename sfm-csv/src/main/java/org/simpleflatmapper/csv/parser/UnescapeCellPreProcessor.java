@@ -10,7 +10,7 @@ public class UnescapeCellPreProcessor extends CellPreProcessor {
 
 
     public final void newCell(char[] chars, int start, int end, CellConsumer cellConsumer, int state) {
-        if ((state & CharConsumer.ESCAPED) == 0) {
+        if (!CharConsumer.isState(state, CharConsumer.ESCAPED)) {
             cellConsumer.newCell(chars, start, end - start);
         } else {
             unescape(chars, start + 1, end, cellConsumer);
@@ -43,10 +43,4 @@ public class UnescapeCellPreProcessor extends CellPreProcessor {
         }
         cellConsumer.newCell(chars, start, l);
     }
-
-    @Override
-    public final boolean ignoreLeadingSpace() {
-        return false;
-    }
-
 }

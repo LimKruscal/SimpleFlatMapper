@@ -9,9 +9,4 @@ public final class NoopCellPreProcessor extends CellPreProcessor {
     public final void newCell(char[] chars, int start, int end, CellConsumer cellConsumer, int state) {
         cellConsumer.newCell(chars, start, end - start);
     }
-
-    @Override
-    public final boolean ignoreLeadingSpace() {
-        return false;
-    }
 }

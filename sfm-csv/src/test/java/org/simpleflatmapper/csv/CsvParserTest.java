@@ -29,6 +29,7 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 //IFJAVA8_START
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 //IFJAVA8_END
@@ -87,12 +88,31 @@ public class CsvParserTest {
 	}
 
 	@Test
-	public void testSimpleCsQuotes() throws  IOException {
+	public void testSimpleCsvQuotes3() throws IOException {
+		final CsvParser.DSL dsl = CsvParser.dsl();
+		assertArrayEquals(new String[] {"value", "val", "", " "}, dsl.iterator("value,val,, ").next());
+	}
+
+	@Test
+	public void testSimpleCsvQuotes() throws  IOException {
 		List<String[]> list = CsvParser.forEach("\"a\",\"b\"\n" +
 				"\"c\"", new ListCollector<String[]>()).getList();
 
 		assertArrayEquals(new String[] {"a", "b"}, list.get(0));
 		assertArrayEquals(new String[] {"c"}, list.get(1));
+	}
+
+	@Test
+	public void testSimpleCsQuotes2() throws  IOException {
+		List<String[]> list = CsvParser.forEach("v\r\"cell\r\"\"value\"\"\",v", new ListCollector<String[]>()).getList();
+		assertArrayEquals(new String[] {"cell\r\"value\"", "v"}, list.get(1));
+	}
+
+	@Test
+	public void testQuotesSpace() throws IOException {
+		Iterator<String[]> it = CsvParser.iterator(new StringReader("\" \""));
+		String[] strings = it.next();
+		assertArrayEquals(new String[]{" "}, strings);
 	}
 
 	@Test
@@ -551,7 +571,9 @@ public class CsvParserTest {
 	private void testParseAll(String[][] expectations, char separator, char quote, String cr, CsvParser.DSL dsl) throws IOException {
 		String[][] cells;
 		cells =
-				dsl.reader(createReader(expectations, separator, quote, cr)).parseAll(new AccumulateCellConsumer()).allValues();
+				dsl.reader(createReader(expectations, separator, quote, cr))
+						.parseAll(new AccumulateCellConsumer())
+						.allValues();
 		assertArrayEquals(expectations, cells);
 	}
 
@@ -918,6 +940,7 @@ public class CsvParserTest {
 	@Test
 	public void testTrimSpaceOnNoQuote() throws IOException {
 		final CsvParser.DSL dsl = CsvParser.dsl().trimSpaces();
+		assertArrayEquals(new String[] {"", ""}, dsl.iterator(", ").next());
 		assertArrayEquals(new String[] {"value", "val", "", ""}, dsl.iterator("value, val  ,, ").next());
 		assertArrayEquals(new String[] {"value", "", "v"}, dsl.iterator("value,   ,v  ").next());
 	}
@@ -1140,11 +1163,23 @@ public class CsvParserTest {
 	}
 
 	private void checkYamlCommentParserRows(List<String[]> rows) {
-		assertEquals(2, rows.size());
+		assertEquals("Comments size does not match " + toString(rows), 2, rows.size());
 		assertArrayEquals(new String[] {"test", " \"hello\" "}, rows.get(0));
 		assertArrayEquals(new String[] {"one more"}, rows.get(1));
 	}
 
+	private String toString(List<String[]> rows) {
+		StringBuilder sb = new StringBuilder();
+
+		for(String[] r : rows) {
+			for(String s : r) {
+				sb.append(s).append(",");
+			}
+			sb.append("\n");
+		}
+
+		return sb.toString();
+	}
 	@Test
 	public void testYamlCommentMapper() throws IOException  {
 		String data = "# comment who cares\n" +
