@@ -39,7 +39,7 @@ public final class YamlCellPreProcessor extends CellPreProcessor {
 		}
 
 		public void newCell(char[] chars, int start, int end, int state) {
-			if (!CharConsumer.isState(state, CharConsumer.COMMENTED)) {
+			if (!CharConsumer.isCommented(state)) {
 				rowCellPreProcessor.newCell(chars, start, end, rowDelegate, state);
 				rowState = REGULAR_ROW;
 			} else {

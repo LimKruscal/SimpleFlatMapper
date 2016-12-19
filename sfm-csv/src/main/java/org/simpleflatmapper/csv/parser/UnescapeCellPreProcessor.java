@@ -10,7 +10,7 @@ public class UnescapeCellPreProcessor extends CellPreProcessor {
 
 
     public final void newCell(char[] chars, int start, int end, CellConsumer cellConsumer, int state) {
-        if (!CharConsumer.isState(state, CharConsumer.ESCAPED)) {
+        if (!CharConsumer.isEscaped(state)) {
             cellConsumer.newCell(chars, start, end - start);
         } else {
             unescape(chars, start + 1, end, cellConsumer);
