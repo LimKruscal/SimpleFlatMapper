@@ -1,6 +1,5 @@
 package org.simpleflatmapper.csv.parser;
 
-import org.simpleflatmapper.csv.impl.cellreader.StringCellValueReader;
 import org.simpleflatmapper.util.CheckedConsumer;
 import org.simpleflatmapper.util.ErrorHelper;
 import java.util.Arrays;
@@ -12,6 +11,7 @@ public final class StringArrayCellConsumer<RH extends CheckedConsumer<? super St
 	private final RH handler;
 	private final int maxNumberOfCellPerRow;
 	private int currentIndex;
+	private int currentLength = DEFAULT_ROW_SIZE;
 	private String[] currentRow = new String[DEFAULT_ROW_SIZE];
 
 	private StringArrayCellConsumer(RH handler, int maxNumberOfCellPerRow) {
@@ -21,18 +21,26 @@ public final class StringArrayCellConsumer<RH extends CheckedConsumer<? super St
 
 	@Override
 	public void newCell(char[] chars, int offset, int length) {
-		ensureCapacity();
+		int currentIndex = this.currentIndex;
+		ensureCapacity(currentIndex);
 		currentRow[currentIndex] = new String(chars, offset, length);
-		currentIndex ++;
+		this.currentIndex++;
 	}
 
-	private void ensureCapacity() {
-		if (currentIndex >= currentRow.length) {
-			if (currentRow.length >= maxNumberOfCellPerRow) {
-				throw new ArrayIndexOutOfBoundsException("Reach maximum number of cell per row " + currentIndex);
-			}
-			currentRow = Arrays.copyOf(currentRow, Math.min(maxNumberOfCellPerRow, currentRow.length * 2));
+	private void ensureCapacity(int currentIndex) {
+		int currentLength = this.currentLength;
+		if (currentIndex >= currentLength) {
+			resize(currentIndex, currentLength);
 		}
+	}
+
+	private void resize(int currentIndex, int currentLength) {
+		int newLength = Math.min(currentLength * 2, maxNumberOfCellPerRow);
+		if (currentIndex >= newLength) {
+            throw new ArrayIndexOutOfBoundsException("Reach maximum number of cell per row " + currentIndex);
+        }
+		this.currentRow = Arrays.copyOf(currentRow, newLength);
+		this.currentLength = newLength;
 	}
 
 	@Override
