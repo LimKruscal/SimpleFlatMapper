@@ -296,4 +296,18 @@ public class PropertyMappingsBuilderTest {
         public InetAddress ipv4;
     }
 
+
+    @Test
+    public void test474() {
+        ClassMeta<List<Tuple2<Tuple2<String, String>, Tuple2<String, String>>>> classMeta =
+                ReflectionService.newInstance().getClassMeta(new TypeReference<List<Tuple2<Tuple2<String, String>, Tuple2<String, String>>>>() {}.getType());
+        PropertyMappingsBuilder<List<Tuple2<Tuple2<String, String>, Tuple2<String, String>>>, SampleFieldKey, FieldMapperColumnDefinition<SampleFieldKey>> builder =
+                defaultPropertyMappingBuilder(classMeta);
+
+        PropertyMapping<List<Tuple2<Tuple2<String, String>, Tuple2<String, String>>>, Object, SampleFieldKey, FieldMapperColumnDefinition<SampleFieldKey>> pm =
+                builder.addProperty(new SampleFieldKey("elt0", 1), FieldMapperColumnDefinition.identity());
+
+
+        assertEquals("[0].element0.element0", pm.getPropertyMeta().getPath());
+    }
 }

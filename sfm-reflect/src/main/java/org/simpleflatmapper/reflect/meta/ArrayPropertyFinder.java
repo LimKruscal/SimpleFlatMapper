@@ -41,9 +41,13 @@ public class ArrayPropertyFinder<T, E> extends AbstractIndexPropertyFinder<T> {
     }
 
     @Override
-    protected void extrapolateIndex(PropertyNameMatcher propertyNameMatcher, Object[] properties, FoundProperty foundProperty, PropertyMatchingScore score, PropertyFinderTransformer propertyFinderTransformer) {
+    protected void extrapolateIndex(PropertyNameMatcher propertyNameMatcher, Object[] properties, FoundProperty foundProperty, PropertyMatchingScore score, PropertyFinderTransformer propertyFinderTransformer, Predicate<ClassMeta<?>> typePredicate) {
         final ClassMeta<E> elementClassMeta = ((ArrayClassMeta)classMeta).getElementClassMeta();
 
+        if (!typePredicate.test(elementClassMeta)) {
+            return;
+        }
+        
         // all element has same type so check if can find any property matching
         PropertyMeta<E, ?> property =
                 elementClassMeta.newPropertyFinder(propertyFilter).findProperty(propertyNameMatcher, properties);
@@ -84,7 +88,7 @@ public class ArrayPropertyFinder<T, E> extends AbstractIndexPropertyFinder<T> {
         
         throw new IllegalArgumentException("Illegal owner expected ArrayElementPropertyMeta got " + subPropertyMeta);
     }
-
+    
     @Override
     protected boolean isValidIndex(IndexedColumn indexedColumn) {
         return indexedColumn.getIndexValue() >= 0;
